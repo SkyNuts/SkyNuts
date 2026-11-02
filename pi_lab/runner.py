@@ -2,7 +2,7 @@
 
 사용 예:
   python -m pi_lab.runner --models qwen2.5:1.5b llama3.2:1b --defenses none sandwich keyword
-  python -m pi_lab.runner --models qwen2.5:1.5b --limit 30          # 빠른 예비실험
+  python -m pi_lab.runner --models qwen2.5:1.5b --techniques naive  # 예비실험(63개)
   python -m pi_lab.runner --probe --models qwen2.5:1.5b             # 이해도(comprehension) 측정
 """
 import argparse
@@ -11,14 +11,15 @@ import sqlite3
 import time
 
 from . import dataset, defenses
-from .app import attack_succeeded, strip_think
+from .app import attack_succeeded, needs_review, strip_think
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
   run_id INTEGER PRIMARY KEY AUTOINCREMENT,
   sample_id TEXT, seed_id TEXT, is_attack INT, goal TEXT, variant TEXT, fmt TEXT,
   technique TEXT, model TEXT, model_digest TEXT, defense TEXT, mode TEXT,
-  blocked INT, response TEXT, attack_success INT, latency REAL, created_at TEXT
+  blocked INT, response TEXT, attack_success INT, needs_review INT, latency REAL,
+  created_at TEXT
 );
 """
 
@@ -66,19 +67,20 @@ def run(models, defense_names, samples, db_path, judge_model=None, mode="attack"
                     blocked = int(detect(s.data))
                     resp = "" if blocked else chat_fn(model, build_messages(s.data))
                 lat = time.time() - t0
+                review = int(bool(s.is_attack) and not blocked and needs_review(s.goal, resp))
                 success = int(bool(s.is_attack) and not blocked
                               and attack_succeeded(s.goal, resp))
                 con.execute(
                     "INSERT INTO runs (sample_id, seed_id, is_attack, goal, variant, fmt, technique,"
-                    " model, model_digest, defense, mode, blocked, response, attack_success,"
-                    " latency, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     " model, model_digest, defense, mode, blocked, response, attack_success,"
+                    " needs_review, latency, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (s.id, s.seed_id, s.is_attack, s.goal, s.variant, s.fmt, s.technique,
-                     model, digest, dname, mode, blocked, resp, success, lat,
+                     model, digest, dname, mode, blocked, resp, success, review, lat,
                      dt.datetime.now().isoformat(timespec="seconds")))
                 con.commit()
                 done += 1
                 print(f"[{done}/{total}] {model} {dname:<12} {s.id:<40} "
-                      f"blocked={blocked} success={success} {lat:.1f}s")
+                      f"blocked={blocked} success={success}{' (검수필요)' if review else ''} {lat:.1f}s")
             if mode == "probe":
                 break  # probe는 방어기법과 무관하므로 1회만
     con.close()
@@ -93,10 +95,14 @@ def main():
     p.add_argument("--db", default="results.db")
     p.add_argument("--limit", type=int, default=0, help="샘플 수 제한(무작위, seed 고정)")
     p.add_argument("--no-formats", action="store_true", help="형식 변형 제외")
+    p.add_argument("--techniques", nargs="+",
+                   help="공격 기법 제한 (예: naive). 정상 데이터는 항상 포함")
     p.add_argument("--probe", action="store_true", help="이해도 측정 모드")
     a = p.parse_args()
 
     samples = dataset.build(include_formats=not a.no_formats)
+    if a.techniques:
+        samples = [s for s in samples if not s.is_attack or s.technique in a.techniques]
     if a.probe:
         samples = [s for s in samples if s.is_attack and s.technique == "naive"]
     if a.limit:

@@ -31,7 +31,9 @@ ollama pull exaone3.5:2.4b                        # 한국어 특화
 ```bash
 pip install -r requirements.txt
 python scripts/offline_detector_eval.py                        # LLM 불필요
-python -m pi_lab.runner --models qwen2.5:1.5b --limit 30       # 예비실험
+python scripts/check_system.py                                 # 내 PC 사양 점검
+python -m pi_lab.runner --models qwen2.5:1.5b --techniques naive   # 예비실험(63개)
+python -m pi_lab.report --db results.db --csv results.csv     # 응답 원문 CSV(검수용)
 python -m pi_lab.runner --models qwen2.5:1.5b exaone3.5:2.4b \
     --defenses none sandwich spotlight keyword norm_keyword llm_judge --judge-model llama3.2:1b
 python -m pi_lab.runner --probe --models qwen2.5:1.5b exaone3.5:2.4b   # 이해도 측정
